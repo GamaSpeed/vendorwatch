@@ -422,6 +422,73 @@ const AgentRail = ({ activity, scanned, findingsCount, watchdog }) => (
   </aside>
 );
 
+/* ── EXPANDER ITEM (needs own state) ────────────────────── */
+const ExpanderItem = ({ f }) => {
+  const [open, setOpen] = useState(false);
+  const totalM = f['total_M$'];
+  const recoverable = totalM * 1e6 * 0.10;
+  const teachers = Math.round(recoverable / 85000);
+  const km = Math.round(recoverable / 2800000);
+  const bursaries = Math.round(recoverable / 10000);
+  const isIBM = f.entities?.some(e=>e.includes('IBM'));
+  return (
+    <div className="expander" key={f.id}>
+      <div className="expander-header" onClick={()=>setOpen(!open)}>
+        <div style={{flex:1}}>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
+            {SEV_BADGE[f.severity]}
+            {TYPE_BADGE[f.type]}
+          </div>
+          <div style={{fontWeight:600,fontSize:13,letterSpacing:'-.01em'}}>{f.title}</div>
+        </div>
+        <div style={{textAlign:'right',marginLeft:16}}>
+          <div className="finding-amount">{fmtM(totalM)}</div>
+          <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>{open?'▲ collapse':'▼ expand'}</div>
+        </div>
+      </div>
+      {open && (
+        <div className="expander-body">
+          <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.6,marginBottom:10}}>{f.evidence}</div>
+          <div style={{fontSize:11,color:'var(--text3)',marginBottom:8}}>
+            <strong style={{color:'var(--text2)'}}>Entities:</strong> {f.entities?.join(' · ')}
+          </div>
+          <div style={{fontSize:10,fontFamily:'JetBrains Mono',color:'var(--text3)'}}>
+            ID: {f.id} · {f.discovered_at?.slice(0,10)}
+          </div>
+          {isIBM && (
+            <div className="clause-box">
+              📌 Contract clause (verbatim): <strong>"extension past January 2019"</strong>
+              <div style={{fontSize:11,marginTop:4,color:'rgba(240,144,168,.7)'}}>
+                This is in the data, not an interpretation. Traceable to ab.ab_sole_source.
+              </div>
+            </div>
+          )}
+          {f.severity === 'CRITICAL' && (
+            <div className="impact-box">
+              💡 <strong>Citizen impact (conservative 10% estimate):</strong>{' '}
+              {teachers.toLocaleString()} teacher salaries · {km} km highway · {bursaries.toLocaleString()} student bursaries
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ── FAQ ITEM (needs own state) ──────────────────────────── */
+const FaqItem = ({ qText, aText }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="expander" style={{marginBottom:7}}>
+      <div className="expander-header" onClick={()=>setOpen(!open)}>
+        <span style={{fontSize:12,fontWeight:600}}>❓ {qText}</span>
+        <span style={{fontSize:10,color:'var(--text3)'}}>{open?'▲':'▼'}</span>
+      </div>
+      {open && <div className="expander-body" style={{fontSize:12,color:'var(--text2)',lineHeight:1.6}}>→ {aText}</div>}
+    </div>
+  );
+};
+
 /* ── VIEW: WATCHLIST ─────────────────────────────────────── */
 const WatchlistView = ({ findings, summary, onSimulate, busy, activity, scanned }) => {
   const [sevFilter, setSevFilter] = useState(['CRITICAL','HIGH']);
@@ -509,57 +576,7 @@ const WatchlistView = ({ findings, summary, onSimulate, busy, activity, scanned 
             ))}
           </div>
 
-          {filtered.map(f=>{
-            const [open, setOpen] = useState(false);
-            const totalM = f['total_M$'];
-            const recoverable = totalM * 1e6 * 0.10;
-            const teachers = Math.round(recoverable / 85000);
-            const km = Math.round(recoverable / 2800000);
-            const bursaries = Math.round(recoverable / 10000);
-            const isIBM = f.entities?.some(e=>e.includes('IBM'));
-            return (
-              <div className="expander" key={f.id}>
-                <div className="expander-header" onClick={()=>setOpen(!open)}>
-                  <div style={{flex:1}}>
-                    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}}>
-                      {SEV_BADGE[f.severity]}
-                      {TYPE_BADGE[f.type]}
-                    </div>
-                    <div style={{fontWeight:600,fontSize:13,letterSpacing:'-.01em'}}>{f.title}</div>
-                  </div>
-                  <div style={{textAlign:'right',marginLeft:16}}>
-                    <div className="finding-amount">{fmtM(totalM)}</div>
-                    <div style={{fontSize:10,color:'var(--text3)',marginTop:2}}>{open?'▲ collapse':'▼ expand'}</div>
-                  </div>
-                </div>
-                {open && (
-                  <div className="expander-body">
-                    <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.6,marginBottom:10}}>{f.evidence}</div>
-                    <div style={{fontSize:11,color:'var(--text3)',marginBottom:8}}>
-                      <strong style={{color:'var(--text2)'}}>Entities:</strong> {f.entities?.join(' · ')}
-                    </div>
-                    <div style={{fontSize:10,fontFamily:'JetBrains Mono',color:'var(--text3)'}}>
-                      ID: {f.id} · {f.discovered_at?.slice(0,10)}
-                    </div>
-                    {isIBM && (
-                      <div className="clause-box">
-                        📌 Contract clause (verbatim): <strong>"extension past January 2019"</strong>
-                        <div style={{fontSize:11,marginTop:4,color:'rgba(240,144,168,.7)'}}>
-                          This is in the data, not an interpretation. Traceable to ab.ab_sole_source.
-                        </div>
-                      </div>
-                    )}
-                    {f.severity === 'CRITICAL' && (
-                      <div className="impact-box">
-                        💡 <strong>Citizen impact (conservative 10% estimate):</strong>{' '}
-                        {teachers.toLocaleString()} teacher salaries · {km} km highway · {bursaries.toLocaleString()} student bursaries
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {filtered.map(f => <ExpanderItem key={f.id} f={f} />)}
         </div>
 
         {/* Right: breakdown + activity */}
@@ -961,18 +978,7 @@ const AskView = ({ findings }) => {
         ['Why Alberta AND federal?',
          'Because neither government can see the full picture alone. VendorWatch is the first tool that crosses both.'],
       ].map(([qText,aText])=>(
-        <div className="expander" key={qText} style={{marginBottom:7}}>
-          {(()=>{
-            const [open,setOpen] = useState(false);
-            return <>
-              <div className="expander-header" onClick={()=>setOpen(!open)}>
-                <span style={{fontSize:12,fontWeight:600}}>❓ {qText}</span>
-                <span style={{fontSize:10,color:'var(--text3)'}}>{open?'▲':'▼'}</span>
-              </div>
-              {open && <div className="expander-body" style={{fontSize:12,color:'var(--text2)',lineHeight:1.6}}>→ {aText}</div>}
-            </>;
-          })()}
-        </div>
+        <FaqItem key={qText} qText={qText} aText={aText} />
       ))}
     </div>
   );
