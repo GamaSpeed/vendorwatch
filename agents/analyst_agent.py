@@ -6,7 +6,6 @@ import json
 import logging
 from typing import Any
 
-import boto3
 import pandas as pd
 from strands import Agent, tool
 from strands.models import BedrockModel
@@ -15,17 +14,19 @@ from config import ANALYST_MODEL, BEDROCK_REGION
 from db.connection import query as db_query
 from db.schema_cache import get_schema as get_schema_text
 from memory.findings_store import add_finding, get_findings
+from memory.query_cache import get as cache_get, set as cache_set
 from pipeline.hhi import calculate_hhi, humanize_impact
 from pipeline.lockout import detect_all_lockins, find_tipping_point
 
 logger = logging.getLogger(__name__)
 
 ANALYST_SYSTEM_PROMPT = """
-Tu es un agent analyste spécialisé en audit des marchés publics canadiens.
-Tu identifies des patterns de concentration, verrouillage et compétition fictive.
-Tu formules 3 hypothèses explicites avant chaque analyse.
-Tu sauvegardes chaque finding validé avec save_finding().
-Tu ne fais jamais d'affirmations sans données traçables.
+You are an analyst agent specialized in Canadian public procurement auditing.
+You identify patterns of concentration, vendor lock-in, and fictitious competition.
+You formulate 3 explicit hypotheses before each analysis.
+You save each validated finding with save_finding().
+You never make claims without data-traceable evidence.
+Always respond in English regardless of the language of the query.
 """
 
 # ──────────────────────────────────────────────
@@ -83,7 +84,13 @@ def compute_hhi(ministry: str = None) -> str:
             ORDER BY hhi DESC
             LIMIT 20;
         """
+        cached = cache_get(sql)
+        if cached is not None and not cached.empty:
+            print("  ✅ compute_hhi: cache hit")
+            return cached.to_json(orient="records", force_ascii=False)
         df = db_query(sql, params)
+        if not df.empty:
+            cache_set(sql, df)
         return df.to_json(orient="records", force_ascii=False)
     except Exception as e:
         return f"ERROR compute_hhi: {str(e)}"
@@ -93,7 +100,6 @@ def compute_hhi(ministry: str = None) -> str:
 def detect_lockin(vendor_name: str, source: str = "ab") -> str:
     """
     Détecte le verrouillage progressif d'un fournisseur spécifique.
-    Calcule ratio sole-source, durée totale, et point de basculement.
 
     Args:
         vendor_name: Nom du fournisseur (ex: "IBM", "Microsoft", "TELUS")
@@ -103,9 +109,7 @@ def detect_lockin(vendor_name: str, source: str = "ab") -> str:
         if source == "ab":
             sql = """
                 SELECT
-                    vendor,
-                    ministry,
-                    amount,
+                    vendor, ministry, amount,
                     start_date::date AS start_date,
                     end_date::date AS end_date,
                     permitted_situations,
@@ -141,21 +145,29 @@ def detect_lockin(vendor_name: str, source: str = "ab") -> str:
                 LIMIT 50
             """
 
-        df = db_query(sql, {"vendor": f"%{vendor_name}%"})
+        # Cache key inclut le vendor pour éviter les collisions
+        cache_key = sql + vendor_name
+        cached = cache_get(cache_key)
+        if cached is not None and not cached.empty:
+            print(f"  ✅ detect_lockin {vendor_name}: cache hit")
+            df = cached
+        else:
+            df = db_query(sql, {"vendor": f"%{vendor_name}%"})
+            if not df.empty:
+                cache_set(cache_key, df)
 
         if df.empty:
-            return json.dumps({"error": f"Aucun contrat trouvé pour {vendor_name}"})
+            return json.dumps({"error": f"No contracts found for {vendor_name}"})
 
         total = float(df["amount"].sum())
         duree_max = float(df["duree_annees"].max()) if "duree_annees" in df.columns else 0
 
-        # Ratio situation g (sole-source AB)
         ratio_g = 0.0
         if "permitted_situations" in df.columns:
             total_g = float(df[df["permitted_situations"] == "g"]["amount"].sum())
             ratio_g = round(total_g / total * 100, 1) if total > 0 else 0.0
 
-        result = {
+        return json.dumps({
             "vendor": vendor_name,
             "source": source,
             "nb_contrats": len(df),
@@ -164,9 +176,8 @@ def detect_lockin(vendor_name: str, source: str = "ab") -> str:
             "ratio_sole_source_pct": ratio_g,
             "ministeres": df["ministry"].unique().tolist(),
             "contrats": df.head(5).to_dict(orient="records"),
-            "verdict": "VERROUILLAGE CONFIRME" if (ratio_g > 80 and duree_max > 3) else "A SURVEILLER"
-        }
-        return json.dumps(result, default=str, ensure_ascii=False)
+            "verdict": "LOCK-IN CONFIRMED" if (ratio_g > 80 and duree_max > 3) else "TO MONITOR"
+        }, default=str, ensure_ascii=False)
     except Exception as e:
         return f"ERROR detect_lockin: {str(e)}"
 
@@ -176,7 +187,7 @@ def find_fictional_competition() -> str:
     """
     Identifie les paires d'organisations qui partagent des administrateurs
     communs (T3010 ARC) et soumissionnent dans la même catégorie FED.
-    Finding clé : CAMH (9 admins / 452M$), Boréal (29 admins / 383.7M$).
+    Key finding: CAMH (9 admins / 452M$), Boréal (29 admins / 383.7M$).
     """
     try:
         sql = """
@@ -231,10 +242,17 @@ def find_fictional_competition() -> str:
             ORDER BY total_M$ DESC
             LIMIT 20;
         """
+        cached = cache_get(sql)
+        if cached is not None and not cached.empty:
+            print("  ✅ find_fictional_competition: cache hit")
+            return cached.to_json(orient="records", force_ascii=False)
+
+        print("  ⏳ find_fictional_competition: querying DB (slow, ~2min)...")
         df = db_query(sql)
-        if df.empty:
-            return json.dumps({"error": "Aucune compétition fictive détectée"})
-        return df.to_json(orient="records", force_ascii=False)
+        if not df.empty:
+            cache_set(sql, df)
+            return df.to_json(orient="records", force_ascii=False)
+        return json.dumps({"error": "No fictitious competition detected"})
     except Exception as e:
         return f"ERROR find_fictional_competition: {str(e)}"
 
@@ -244,7 +262,7 @@ def find_bigov_network() -> str:
     """
     Identifie les organisations qui reçoivent simultanément du financement
     fédéral (Immigration Canada) ET des contrats sole-source Alberta.
-    Finding clé : Catholic Social Services 1351.9M$, Bow Valley 1551M$.
+    Key finding: Catholic Social Services 1351.9M$, Bow Valley 1551M$.
     """
     try:
         sql = """
@@ -285,21 +303,25 @@ def find_bigov_network() -> str:
             )
             SELECT
                 f.canonical_name,
-                f.fed_M$,
-                f.nb_contrats_fed,
-                a.ab_M$,
-                a.nb_sole_ab,
-                a.nb_min_ab,
+                f.fed_M$, f.nb_contrats_fed,
+                a.ab_M$, a.nb_sole_ab, a.nb_min_ab,
                 ROUND(f.fed_M$ + a.ab_M$, 1) AS total_M$
             FROM fed_immigration f
             JOIN ab_social a USING (entity_id)
             ORDER BY total_M$ DESC
             LIMIT 15;
         """
+        cached = cache_get(sql)
+        if cached is not None and not cached.empty:
+            print("  ✅ find_bigov_network: cache hit")
+            return cached.to_json(orient="records", force_ascii=False)
+
+        print("  ⏳ find_bigov_network: querying DB (slow, ~2min)...")
         df = db_query(sql)
-        if df.empty:
-            return json.dumps({"error": "Aucun réseau bi-gouvernemental détecté"})
-        return df.to_json(orient="records", force_ascii=False)
+        if not df.empty:
+            cache_set(sql, df)
+            return df.to_json(orient="records", force_ascii=False)
+        return json.dumps({"error": "No bi-governmental network detected"})
     except Exception as e:
         return f"ERROR find_bigov_network: {str(e)}"
 
@@ -315,10 +337,7 @@ def find_cra_revocations(entity_name: str) -> str:
     try:
         sql = """
             SELECT
-                ci.bn,
-                ci.legal_name,
-                ci.city,
-                ci.category,
+                ci.bn, ci.legal_name, ci.city, ci.category,
                 COUNT(ti.bn) AS nb_violations_arithmetiques
             FROM cra.cra_identification ci
             LEFT JOIN cra.t3010_impossibilities ti ON LEFT(ti.bn, 9) = LEFT(ci.bn, 9)
@@ -329,7 +348,6 @@ def find_cra_revocations(entity_name: str) -> str:
         df = db_query(sql, {"name": f"%{entity_name}%"})
         if df.empty:
             return json.dumps({"found": False, "entity": entity_name})
-
         return json.dumps({
             "found": True,
             "entity": entity_name,
@@ -349,14 +367,14 @@ def save_finding(
     finding_type: str
 ) -> str:
     """
-    Sauvegarde un finding validé dans findings.json.
+    Saves a validated finding to findings.json.
 
     Args:
-        title: Titre court du finding (ex: "Verrouillage IBM Alberta")
-        severity: "CRITICAL", "HIGH", ou "MEDIUM"
-        total_M: Montant total en millions de dollars
-        entities: Entités impliquées séparées par virgule
-        evidence: Preuve principale traçable dans les données
+        title: Short finding title (e.g. "IBM Alberta Lock-in")
+        severity: "CRITICAL", "HIGH", or "MEDIUM"
+        total_M: Total amount in millions of dollars
+        entities: Involved entities separated by commas
+        evidence: Main traceable evidence in the data
         finding_type: "lockin", "bigov_network", "fictional_competition", "hhi"
     """
     try:
@@ -408,23 +426,23 @@ def _build_analyst_agent() -> Agent:
 
 def run_analysis() -> dict[str, Any]:
     """
-    Lance l'analyse complète sur les 3 findings critiques.
-    IBM + Catholic Social Services + CAMH → sauvegardés dans findings.json
+    Runs full analysis on the 3 critical findings.
+    IBM + Catholic Social Services + CAMH → saved in findings.json
     """
     agent = _build_analyst_agent()
 
     prompt = """
-Analyse les données gouvernementales canadiennes et identifie les findings critiques.
+Analyze Canadian government procurement data and identify critical findings.
 
-Étapes obligatoires :
-1. Formule 3 hypothèses explicites avant de commencer
-2. detect_lockin("IBM", "ab") → vérifie verrouillage IT Alberta
-3. detect_lockin("Microsoft", "ab") → vérifie verrouillage cloud
-4. find_bigov_network() → identifie réseau bi-gouvernemental
-5. find_fictional_competition() → identifie compétition fictive
-6. find_cra_revocations("Catholic Social Services") → signal ARC
-7. Pour chaque finding validé → save_finding() avec severity CRITICAL/HIGH/MEDIUM
-8. Retourne un résumé JSON avec la liste des findings sauvegardés
+Mandatory steps:
+1. Formulate 3 explicit hypotheses before starting
+2. detect_lockin("IBM", "ab") → check IT lock-in Alberta
+3. detect_lockin("Microsoft", "ab") → check cloud lock-in
+4. find_bigov_network() → identify bi-governmental network
+5. find_fictional_competition() → identify fictitious competition
+6. find_cra_revocations("Catholic Social Services") → CRA signal
+7. For each validated finding → save_finding() with severity CRITICAL/HIGH/MEDIUM
+8. Return a JSON summary with the list of saved findings
 """
 
     try:
@@ -441,27 +459,14 @@ Analyse les données gouvernementales canadiennes et identifie les findings crit
 
 
 # ──────────────────────────────────────────────
-# TEST DIRECT DES OUTILS (sans LLM)
+# TEST DIRECT (sans LLM)
 # ──────────────────────────────────────────────
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    print("=== TEST 1 — detect_lockin IBM Alberta ===")
-    result = detect_lockin("IBM", "ab")
-    print(result)
+    print("=== TEST — detect_lockin IBM Alberta (direct, no LLM) ===")
+    print(detect_lockin("IBM", "ab"))
 
-    print("\n=== TEST 2 — find_cra_revocations CSS ===")
-    result2 = find_cra_revocations("Catholic Social Services")
-    print(result2)
-
-    print("\n=== TEST 3 — save_finding test ===")
-    result3 = save_finding(
-        title="TEST Verrouillage IBM Alberta",
-        severity="CRITICAL",
-        total_M=194.6,
-        entities="IBM CANADA LIMITED, Service Alberta, Technology and Innovation",
-        evidence="93.6% contrats situation g, 8 ans IMAGIS PeopleSoft",
-        finding_type="lockin"
-    )
-    print(result3)
+    print("\n=== TEST — find_cra_revocations CSS (direct, no LLM) ===")
+    print(find_cra_revocations("Catholic Social Services"))

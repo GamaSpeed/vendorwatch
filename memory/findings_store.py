@@ -3,7 +3,7 @@ Stockage persistant des findings entre les runs d'agents.
 Format JSON. Append-on-save. Dédupliqué par (vendor_id, finding_type).
 """
 import json
-import os
+import os, tempfile
 from datetime import datetime
 from pathlib import Path
 from config import FINDINGS_PATH
@@ -23,28 +23,29 @@ def load() -> dict:
 
 
 def save(store: dict):
-    Path(FINDINGS_PATH).parent.mkdir(exist_ok=True)
-    with open(FINDINGS_PATH, "w", encoding="utf-8") as f:
-        json.dump(store, f, indent=2, default=str, ensure_ascii=False)
+    path = Path(FINDINGS_PATH)
+    path.parent.mkdir(exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=".findings_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(store, f, indent=2, default=str, ensure_ascii=False)
+        os.replace(tmp_path, path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
 
 
 def add_finding(finding: dict) -> str:
-    """
-    Ajoute un finding. Retourne son ID.
-    Déduplique par (vendor_id, finding_type) si les deux sont présents.
-    """
     store = load()
-    # Déduplication
-    vendor_id = finding.get("vendor_id", "")
-    ftype     = finding.get("finding_type", "")
-    if vendor_id and ftype:
-        existing = [
-            f for f in store["findings"]
-            if f.get("vendor_id") == vendor_id
-            and f.get("finding_type") == ftype
-        ]
-        if existing:
-            return existing[0]["id"]
+
+    # Déduplication par type + première entité
+    ftype = finding.get("type", "")
+    first_entity = finding.get("entities", [""])[0].lower()[:20]
+    for f in store["findings"]:
+        if (f.get("type") == ftype and
+                f.get("entities", [""])[0].lower()[:20] == first_entity):
+            return f["id"]  # déjà là
 
     finding["discovered_at"] = datetime.now().isoformat()
     finding["id"] = f"F{len(store['findings']) + 1:04d}"
@@ -61,6 +62,14 @@ def get_findings(severity: str = None, category: str = None) -> list:
     if category:
         findings = [f for f in findings if f.get("category") == category]
     return findings
+
+
+def get_finding(finding_id: str) -> dict | None:
+    """Fetch one finding by its 'id' field. Used by Narrator + Orchestrator."""
+    for f in load()["findings"]:
+        if f.get("id") == finding_id:
+            return f
+    return None
 
 
 def mark_run_complete():
