@@ -5,13 +5,15 @@ load_dotenv()
 # ── Base de données ──────────────────────────────────────
 DB_URL = os.getenv("DB_CONNECTION_STRING")
 
-# ── AWS Bedrock — IDs modèles exacts (pas de suffixe -v1:0) ──
-ORCHESTRATOR_MODEL = "anthropic.claude-opus-4-5"
-ANALYST_MODEL      = "anthropic.claude-opus-4-5"
-SQL_MODEL          = "anthropic.claude-sonnet-4-5"
-NARRATOR_MODEL     = "anthropic.claude-sonnet-4-5"
-WATCHDOG_MODEL     = "anthropic.claude-haiku-4-5-20251001"
+# ── AWS Bedrock — IDs modèles confirmés par AWS Workshop Studio ──
+ORCHESTRATOR_MODEL = "us.anthropic.claude-opus-4-6-v1"    # strongest reasoning
+ANALYST_MODEL      = "us.anthropic.claude-opus-4-6-v1"    # strongest reasoning
+SQL_MODEL          = "us.anthropic.claude-sonnet-4-6"      # fast, capable, newest
+NARRATOR_MODEL     = "us.anthropic.claude-sonnet-4-6"      # fast, capable, newest
+WATCHDOG_MODEL     = "amazon.nova-lite-v1:0"               # lightweight, sub-second
+
 BEDROCK_REGION     = "us-east-1"
+BEDROCK_REGION_ALT = "us-west-2"
 
 # ── Backup LLM direct ────────────────────────────────────
 ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY")
