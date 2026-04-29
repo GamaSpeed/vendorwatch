@@ -259,7 +259,7 @@ def get_summary() -> str:
         last_run = store_raw.get("last_full_run")
 
         total_exposure = sum(
-            float(f.get("exposure_millions", 0)) for f in all_findings
+            float(f.get("total_M$", f.get("exposure_millions", 0))) for f in all_findings
         )
         severity_counts: dict[str, int] = {}
         for f in all_findings:
@@ -270,21 +270,20 @@ def get_summary() -> str:
             [
                 {
                     "id": f.get("id"),
-                    "vendor_name": f.get("vendor_name"),
-                    "exposure_millions": f.get("exposure_millions"),
+                    "vendor_name": f.get("entities", ["?"])[0],
+                    "exposure_millions": f.get("total_M$"),
                     "severity": f.get("severity"),
-                    "finding_type": f.get("finding_type"),
-                    "cra_revocation": f.get("cra_revocation"),
+                    "finding_type": f.get("type"),
                 }
                 for f in all_findings
-                if f.get("exposure_millions")
+                if f.get("total_M$")
             ],
             key=lambda x: float(x["exposure_millions"] or 0),
             reverse=True,
         )[:10]
 
         critical_exposure = sum(
-            float(f.get("exposure_millions", 0))
+            float(f.get("total_M$", f.get("exposure_millions", 0)))
             for f in all_findings
             if f.get("severity") == "CRITICAL"
         )
@@ -296,7 +295,7 @@ def get_summary() -> str:
                 "total_exposure_millions": round(total_exposure, 1),
                 "critical_exposure_millions": round(critical_exposure, 1),
                 "severity_breakdown": severity_counts,
-                "vendors_tracked": len({f.get("vendor_id") for f in all_findings if f.get("vendor_id")}),
+                "vendors_tracked": len(all_findings),
             },
             "top_vendors": top_vendors,
             "last_full_run": last_run,
