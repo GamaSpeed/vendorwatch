@@ -1,17 +1,30 @@
-﻿.env
+# Credentials — JAMAIS committer
+.env
+
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
 venv/
 env/
+
+# Mémoire persistante — générée au runtime
 memory/findings.json
 memory/query_cache.json
+
+# PDF générés
 *.pdf
+
+# OS
 .DS_Store
 Thumbs.db
-desktop.ini
+
+# IDE
 .vscode/
 .idea/
 *.swp
+
+# Test files
+test_*.py
 backup_*.md
